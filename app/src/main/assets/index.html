@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#111318">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Mando Fire TV</title>
+<style>
+:root{--bg:#111318;--card:#1c1f27;--btn:#272b36;--btn2:#323746;--acc:#ff9900;--txt:#eef0f4;--mut:#8a90a0;--ok:#3ecf8e;--bad:#ff5c5c}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;user-select:none;-webkit-user-select:none}
+.wrap{max-width:420px;margin:0 auto;padding:14px 16px 28px}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+h1{font-size:18px;margin:0;font-weight:650}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--bad);margin-right:6px}
+.dot.on{background:var(--ok)}
+.status{font-size:13px;color:var(--mut);display:flex;align-items:center}
+.icon{background:none;border:0;color:var(--txt);font-size:22px;padding:6px;cursor:pointer}
+button.b{background:var(--btn);color:var(--txt);border:0;border-radius:14px;font-size:20px;height:58px;cursor:pointer;transition:transform .06s,background .1s;touch-action:manipulation}
+button.b:active,button.b.pressed{transform:scale(.94);background:var(--btn2)}
+.row{display:grid;gap:10px;margin-bottom:10px}
+.r3{grid-template-columns:repeat(3,1fr)}
+.r4{grid-template-columns:repeat(4,1fr)}
+.pad{position:relative;width:260px;height:260px;margin:12px auto 16px;border-radius:50%;background:var(--card)}
+.pad button{position:absolute;background:transparent;border:0;color:var(--txt);font-size:26px;cursor:pointer;touch-action:manipulation}
+.pad button:active{color:var(--acc)}
+.pad .u{top:0;left:80px;width:100px;height:80px}
+.pad .d{bottom:0;left:80px;width:100px;height:80px}
+.pad .l{left:0;top:80px;width:80px;height:100px}
+.pad .r{right:0;top:80px;width:80px;height:100px}
+.pad .ok{left:80px;top:80px;width:100px;height:100px;border-radius:50%;background:var(--btn);font-size:17px;font-weight:600}
+.pad .ok:active{background:var(--acc);color:#111}
+h2{font-size:13px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin:18px 0 8px}
+.apps{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.apps button{background:var(--card);color:var(--txt);border:1px solid #2c3140;border-radius:12px;padding:12px 6px;font-size:14px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.apps button:active{border-color:var(--acc)}
+.txt{display:flex;gap:8px}
+input{flex:1;background:var(--card);border:1px solid #2c3140;color:var(--txt);border-radius:12px;padding:12px;font-size:16px;user-select:text;-webkit-user-select:text}
+.send{background:var(--acc);color:#111;border:0;border-radius:12px;padding:0 16px;font-weight:600;font-size:15px;cursor:pointer}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(80px);background:#2a2f3c;color:var(--txt);padding:10px 16px;border-radius:12px;font-size:14px;max-width:90%;transition:transform .2s;z-index:9}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.err{background:#5a2328}
+dialog{background:var(--card);color:var(--txt);border:0;border-radius:18px;width:min(92vw,400px);padding:18px}
+dialog::backdrop{background:#0009}
+dialog label{display:block;font-size:13px;color:var(--mut);margin:10px 0 6px}
+.list{max-height:200px;overflow:auto;margin-top:6px}
+.item{display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid #2c3140;font-size:14px}
+.item span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini{background:var(--btn);color:var(--txt);border:0;border-radius:8px;padding:6px 10px;font-size:13px;cursor:pointer}
+.acts{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.hint{font-size:12px;color:var(--mut);margin-top:6px;line-height:1.4}
+</style></head>
+<body><div class="wrap" style="padding-top:22px">
+<header>
+  <div><h1>Mando Fire TV</h1><div class="status"><span id="dot" class="dot"></span><span id="st">Comprobando…</span></div></div>
+  <button class="icon" id="cfgBtn" aria-label="Ajustes">⚙️</button>
+</header>
+
+<div class="row r3">
+  <button class="b" data-k="26" title="Encender/apagar">⏻</button>
+  <button class="b" data-k="176" title="Ajustes">⚙</button>
+  <button class="b" data-k="82" title="Menú">☰</button>
+</div>
+
+<div class="pad">
+  <button class="u" data-k="19" data-rep>▲</button>
+  <button class="l" data-k="21" data-rep>◀</button>
+  <button class="ok" data-k="23">OK</button>
+  <button class="r" data-k="22" data-rep>▶</button>
+  <button class="d" data-k="20" data-rep>▼</button>
+</div>
+
+<div class="row r3">
+  <button class="b" data-k="4" title="Atrás">↩</button>
+  <button class="b" data-k="3" title="Inicio">⌂</button>
+  <button class="b" data-k="82" data-long title="Mantener menú">⋯</button>
+</div>
+
+<div class="row r3">
+  <button class="b" data-k="89" data-rep title="Retroceder">⏪</button>
+  <button class="b" data-k="85" title="Play/Pausa">⏯</button>
+  <button class="b" data-k="90" data-rep title="Avanzar">⏩</button>
+</div>
+
+<div class="row r3">
+  <button class="b" data-k="25" data-rep title="Bajar volumen">🔉</button>
+  <button class="b" data-k="164" title="Silencio">🔇</button>
+  <button class="b" data-k="24" data-rep title="Subir volumen">🔊</button>
+</div>
+
+<h2>Apps</h2>
+<div class="apps" id="apps"></div>
+
+<h2>Escribir</h2>
+<div class="txt">
+  <input id="txt" placeholder="Texto para buscar…" autocomplete="off">
+  <button class="send" id="sendTxt">Enviar</button>
+</div>
+<div class="row r4" style="margin-top:10px">
+  <button class="b" data-k="67" title="Borrar" style="font-size:16px">⌫</button>
+  <button class="b" data-k="62" title="Espacio" style="font-size:14px">espacio</button>
+  <button class="b" data-k="66" title="Intro" style="font-size:16px">⏎</button>
+  <button class="b" data-k="84" title="Buscar" style="font-size:16px">🔍</button>
+</div>
+</div>
+
+<dialog id="cfg">
+  <h1 style="font-size:17px;margin:0 0 4px">Ajustes</h1>
+  <label>IP del Fire TV</label>
+  <div class="txt"><input id="ip" placeholder="192.168.1.50" inputmode="decimal"><button class="send" id="conBtn">Conectar</button></div>
+  <div class="hint">En el Fire TV: Ajustes → Mi Fire TV → Acerca de → Red. La primera vez acepta el aviso en la tele.</div>
+  <label>Mis apps</label>
+  <div class="list" id="myApps"></div>
+  <div class="txt" style="margin-top:8px"><input id="newName" placeholder="Nombre"><input id="newPkg" placeholder="paquete"></div>
+  <div class="acts" style="justify-content:space-between">
+    <button class="mini" id="scanBtn">Ver apps instaladas</button>
+    <button class="mini" id="addBtn">Añadir</button>
+  </div>
+  <div class="list" id="scan"></div>
+  <div class="acts"><button class="send" id="closeCfg" style="padding:10px 18px">Hecho</button></div>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+let apps=[], tTimer;
+function toast(m,err){const t=$('#toast');t.textContent=m;t.className='toast show'+(err?' err':'');clearTimeout(tTimer);tTimer=setTimeout(()=>t.className='toast',2200)}
+const _pend={};let _seq=0;
+window.__cb=(id,json)=>{const f=_pend[id];delete _pend[id];if(f)f(JSON.parse(json))};
+function api(p,b){return new Promise(res=>{const id=++_seq;_pend[id]=res;Android.call(id,p,b?JSON.stringify(b):'')})}
+function vib(){try{Android.vibrate()}catch(e){}}
+
+async function key(code,long){vib();const r=await api('/api/key',{code,long:!!long});if(!r.ok)toast(r.msg||'Error',true)}
+
+// Botones con repetición al mantener
+document.querySelectorAll('[data-k]').forEach(b=>{
+  const code=+b.dataset.k, rep=b.hasAttribute('data-rep'), lng=b.hasAttribute('data-long');
+  let iv,to,fired;
+  const start=e=>{e.preventDefault();fired=false;b.classList.add('pressed');
+    if(rep){key(code);fired=true;to=setTimeout(()=>iv=setInterval(()=>key(code),180),450)}};
+  const end=e=>{e.preventDefault();b.classList.remove('pressed');clearTimeout(to);clearInterval(iv);if(!fired)key(code,lng)};
+  const cancel=()=>{b.classList.remove('pressed');clearTimeout(to);clearInterval(iv)};
+  b.addEventListener('pointerdown',start);b.addEventListener('pointerup',end);
+  b.addEventListener('pointerleave',cancel);b.addEventListener('pointercancel',cancel);
+  b.addEventListener('contextmenu',e=>e.preventDefault());
+});
+
+function renderApps(){
+  $('#apps').innerHTML='';
+  apps.forEach(a=>{const b=document.createElement('button');b.textContent=a.name;
+    b.onclick=async()=>{vib();const r=await api('/api/app',{pkg:a.pkg});toast(r.ok?'Abriendo '+a.name:r.msg,!r.ok)};$('#apps').appendChild(b)});
+  $('#myApps').innerHTML='';
+  apps.forEach((a,i)=>{const d=document.createElement('div');d.className='item';
+    const s=document.createElement('span');s.textContent=a.name+' · '+a.pkg;
+    const x=document.createElement('button');x.className='mini';x.textContent='✕';x.onclick=()=>{apps.splice(i,1);saveApps()};
+    d.append(s,x);$('#myApps').appendChild(d)});
+}
+async function saveApps(){const r=await api('/api/apps',{apps});if(r.ok){apps=r.apps;renderApps()}else toast(r.msg,true)}
+
+async function status(){
+  const r=await api('/api/status');
+  if(r.apps){apps=r.apps;renderApps()}
+  
+  if(r.ip!==undefined && !$('#ip').value)$('#ip').value=r.ip;
+  $('#dot').className='dot'+(r.connected?' on':'');
+  $('#st').textContent=r.connected?'Conectado a '+r.ip:(r.ip?'Desconectado — toca ⚙️ y Conectar':'Configura la IP en ⚙️');
+  if(!r.ip)$('#cfg').showModal();
+  else if(!r.connected){const c=await api('/api/connect',{});if(c.ok){$('#dot').className='dot on';$('#st').textContent='Conectado a '+r.ip}}
+}
+
+$('#cfgBtn').onclick=()=>$('#cfg').showModal();
+$('#closeCfg').onclick=()=>{$('#cfg').close();status()};
+$('#conBtn').onclick=async()=>{toast('Conectando…');const r=await api('/api/connect',{ip:$('#ip').value.trim()});toast(r.ok?'¡Conectado!':r.msg,!r.ok);status()};
+$('#addBtn').onclick=()=>{const n=$('#newName').value.trim(),p=$('#newPkg').value.trim();if(!n||!p)return toast('Pon nombre y paquete',true);apps.push({name:n,pkg:p});$('#newName').value='';$('#newPkg').value='';saveApps()};
+$('#scanBtn').onclick=async()=>{$('#scan').innerHTML='<div class="hint">Buscando…</div>';const r=await api('/api/packages');
+  if(!r.ok){$('#scan').innerHTML='';return toast(r.msg||'Error',true)}
+  $('#scan').innerHTML='';r.packages.forEach(p=>{const d=document.createElement('div');d.className='item';const s=document.createElement('span');s.textContent=p;
+    const a=document.createElement('button');a.className='mini';a.textContent='+';a.onclick=()=>{$('#newPkg').value=p;$('#newName').focus()};d.append(s,a);$('#scan').appendChild(d)})};
+async function sendText(){const t=$('#txt').value;if(!t)return;const r=await api('/api/text',{text:t});if(r.ok){$('#txt').value='';toast('Enviado')}else toast(r.msg,true)}
+$('#sendTxt').onclick=sendText;$('#txt').addEventListener('keydown',e=>{if(e.key==='Enter')sendText()});
+
+status();setInterval(status,20000);
+</script>
+</body></html>
