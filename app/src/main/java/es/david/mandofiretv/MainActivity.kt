@@ -30,6 +30,7 @@ class MainActivity : Activity() {
     private var monkeySock: AdbStream? = null
     private var monkeyFailedAt = 0L
     private val pendingKeys = AtomicInteger(0)
+    private lateinit var lg: LgTv
 
     private val pkgRe = Regex("^[A-Za-z0-9_.]+$")
     private val ipRe = Regex("^[A-Za-z0-9.\\-]+(:\\d{1,5})?$")
@@ -46,6 +47,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("config", MODE_PRIVATE)
+        lg = LgTv(prefs)
         web = WebView(this)
         web.setBackgroundColor(0xFF111318.toInt())
         web.settings.javaScriptEnabled = true
@@ -56,14 +58,14 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        exec.execute { try { dadb?.close() } catch (_: Exception) {} }
+        exec.execute { try { dadb?.close() } catch (_: Exception) {}; lg.close() }
         exec.shutdown()
         super.onDestroy()
     }
 
     // Los botones de volumen del móvil controlan el volumen de la tele cuando hay conexión
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (connected && (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)) {
+        if ((connected || lg.configured()) && (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)) {
             val code = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) 24 else 25
             if (pendingKeys.get() < 2) {
                 pendingKeys.incrementAndGet()
@@ -111,6 +113,7 @@ class MainActivity : Activity() {
             .put("adb", true)
             .put("ip", ip())
             .put("connected", connected)
+            .put("lg_ip", lg.ip())
             .put("apps", apps())
 
         "/api/connect" -> {
@@ -124,6 +127,16 @@ class MainActivity : Activity() {
                 }
                 val (ok, out) = shell("echo ok")
                 if (ok && out.contains("ok")) result(true, "Conectado") else result(false, out)
+            }
+        }
+
+        "/api/lg" -> {
+            val newIp = d.optString("ip").trim()
+            if (newIp.isNotEmpty() && !ipRe.matches(newIp)) result(false, "IP no válida")
+            else {
+                lg.setIp(newIp)
+                if (newIp.isEmpty()) result(true, "Tele LG desactivada: el volumen va por el Fire TV")
+                else { val (ok, msg) = lg.connect(60_000); result(ok, msg) }
             }
         }
 
@@ -235,6 +248,8 @@ class MainActivity : Activity() {
 
     /** Envía una tecla: primero por el canal rápido; si no va, con "input keyevent". */
     private fun sendKey(code: Int, long: Boolean): Pair<Boolean, String> {
+        // Volumen y silencio van directos a la tele LG si está configurada
+        if (lg.configured() && (code == 24 || code == 25 || code == 164)) return lg.key(code)
         if (!long) {
             val sock = monkey()
             if (sock != null) {

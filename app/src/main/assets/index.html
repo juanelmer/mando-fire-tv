@@ -108,8 +108,11 @@ dialog label{display:block;font-size:13px;color:var(--mut);margin:10px 0 6px}
 <dialog id="cfg">
   <h1 style="font-size:17px;margin:0 0 4px">Ajustes</h1>
   <label>IP del Fire TV</label>
-  <div class="txt"><input id="ip" placeholder="192.168.1.50" inputmode="decimal"><button class="send" id="conBtn">Conectar</button></div>
+  <div class="txt"><input id="ip" placeholder="192.168.1.50" inputmode="url" autocapitalize="off"><button class="send" id="conBtn">Conectar</button></div>
   <div class="hint">En el Fire TV: Ajustes → Mi Fire TV → Acerca de → Red. La primera vez acepta el aviso en la tele.</div>
+  <label>IP de la tele LG (para volumen y silencio)</label>
+  <div class="txt"><input id="lgip" placeholder="192.168.1.60" inputmode="url" autocapitalize="off"><button class="send" id="lgBtn">Vincular</button></div>
+  <div class="hint">Déjalo vacío para no usarla. Al vincular, acepta el aviso que sale en la tele LG.</div>
   <label>Mis apps</label>
   <div class="list" id="myApps"></div>
   <div class="txt" style="margin-top:8px"><input id="newName" placeholder="Nombre"><input id="newPkg" placeholder="paquete"></div>
@@ -164,6 +167,7 @@ async function status(){
   if(r.apps){apps=r.apps;renderApps()}
   
   if(r.ip!==undefined && !$('#ip').value)$('#ip').value=r.ip;
+  if(r.lg_ip!==undefined && !$('#lgip').value)$('#lgip').value=r.lg_ip;
   $('#dot').className='dot'+(r.connected?' on':'');
   $('#st').textContent=r.connected?'Conectado a '+r.ip:(r.ip?'Desconectado — toca ⚙️ y Conectar':'Configura la IP en ⚙️');
   if(!r.ip)$('#cfg').showModal();
@@ -173,6 +177,7 @@ async function status(){
 $('#cfgBtn').onclick=()=>$('#cfg').showModal();
 $('#closeCfg').onclick=()=>{$('#cfg').close();status()};
 $('#conBtn').onclick=async()=>{toast('Conectando…');const r=await api('/api/connect',{ip:$('#ip').value.trim()});toast(r.ok?'¡Conectado!':r.msg,!r.ok);status()};
+$('#lgBtn').onclick=async()=>{toast('Mira la tele LG y acepta el aviso…');const r=await api('/api/lg',{ip:$('#lgip').value.trim()});toast(r.msg||(r.ok?'OK':'Error'),!r.ok)};
 $('#addBtn').onclick=()=>{const n=$('#newName').value.trim(),p=$('#newPkg').value.trim();if(!n||!p)return toast('Pon nombre y paquete',true);apps.push({name:n,pkg:p});$('#newName').value='';$('#newPkg').value='';saveApps()};
 $('#scanBtn').onclick=async()=>{$('#scan').innerHTML='<div class="hint">Buscando…</div>';const r=await api('/api/packages');
   if(!r.ok){$('#scan').innerHTML='';return toast(r.msg||'Error',true)}
