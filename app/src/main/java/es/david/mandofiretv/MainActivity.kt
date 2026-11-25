@@ -9,11 +9,13 @@ import android.view.KeyEvent
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import dadb.AdbKeyPair
+import dadb.AdbStream
 import dadb.Dadb
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 class MainActivity : Activity() {
 
@@ -22,6 +24,12 @@ class MainActivity : Activity() {
     private val exec = Executors.newSingleThreadExecutor()   // las órdenes ADB van en fila, una a una
     private var dadb: Dadb? = null
     @Volatile private var connected = false
+
+    // Canal rápido: un "monkey" que se queda abierto en el Fire TV y recibe teclas al instante
+    private var monkeyProc: AdbStream? = null
+    private var monkeySock: AdbStream? = null
+    private var monkeyFailedAt = 0L
+    private val pendingKeys = AtomicInteger(0)
 
     private val pkgRe = Regex("^[A-Za-z0-9_.]+$")
     private val ipRe = Regex("^[A-Za-z0-9.\\-]+(:\\d{1,5})?$")
@@ -57,7 +65,10 @@ class MainActivity : Activity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (connected && (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)) {
             val code = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) 24 else 25
-            exec.execute { shell("input keyevent $code") }
+            if (pendingKeys.get() < 2) {
+                pendingKeys.incrementAndGet()
+                exec.execute { try { sendKey(code, false) } finally { pendingKeys.decrementAndGet() } }
+            }
             return true
         }
         return super.onKeyDown(keyCode, event)
@@ -67,7 +78,15 @@ class MainActivity : Activity() {
     inner class Bridge {
         @JavascriptInterface
         fun call(id: Int, path: String, body: String) {
+            // Si ya hay teclas esperando en cola, se descartan las repeticiones para que no se acumule retraso
+            val isKey = path == "/api/key"
+            if (isKey && pendingKeys.get() >= 2) {
+                runOnUiThread { web.evaluateJavascript("window.__cb($id, ${JSONObject.quote(result(true, "").toString())})", null) }
+                return
+            }
+            if (isKey) pendingKeys.incrementAndGet()
             exec.execute {
+                if (isKey) pendingKeys.decrementAndGet()
                 val res = try {
                     route(path, if (body.isEmpty()) JSONObject() else JSONObject(body))
                 } catch (e: Exception) {
@@ -112,8 +131,7 @@ class MainActivity : Activity() {
             val code = d.optInt("code", -1)
             if (code < 0) result(false, "Código inválido")
             else {
-                val long = if (d.optBoolean("long")) "--longpress " else ""
-                val (ok, out) = shell("input keyevent $long$code")
+                val (ok, out) = sendKey(code, d.optBoolean("long"))
                 result(ok, out)
             }
         }
@@ -182,7 +200,61 @@ class MainActivity : Activity() {
         return Dadb.create(host, port, keyPair()).also { dadb = it }
     }
 
+    // ------------------------------------------------------------ canal rápido (monkey)
+    private fun closeMonkey() {
+        try { monkeySock?.close() } catch (_: Exception) {}
+        try { monkeyProc?.close() } catch (_: Exception) {}
+        monkeySock = null
+        monkeyProc = null
+    }
+
+    private fun drain(stream: AdbStream) {
+        Thread {
+            try { while (true) { if (stream.source.readUtf8Line() == null) break } } catch (_: Exception) {}
+        }.apply { isDaemon = true }.start()
+    }
+
+    /** Abre (o reutiliza) el monkey en modo red dentro del Fire TV. */
+    private fun monkey(): AdbStream? {
+        monkeySock?.let { return it }
+        if (System.currentTimeMillis() - monkeyFailedAt < 30_000) return null   // si falló hace poco, usa el modo normal
+        val conn = try { connection() } catch (e: Exception) { return null }
+        // ¿Ya hay uno escuchando (de una vez anterior)?
+        try { return conn.open("tcp:1080").also { monkeySock = it; drain(it) } } catch (_: Exception) {}
+        try {
+            monkeyProc = conn.open("shell:monkey --port 1080").also { drain(it) }
+            repeat(15) {
+                Thread.sleep(200)
+                try { return conn.open("tcp:1080").also { monkeySock = it; drain(it) } } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+        closeMonkey()
+        monkeyFailedAt = System.currentTimeMillis()
+        return null
+    }
+
+    /** Envía una tecla: primero por el canal rápido; si no va, con "input keyevent". */
+    private fun sendKey(code: Int, long: Boolean): Pair<Boolean, String> {
+        if (!long) {
+            val sock = monkey()
+            if (sock != null) {
+                try {
+                    val name = KeyEvent.keyCodeToString(code)
+                    sock.sink.writeUtf8("press $name\n")
+                    sock.sink.flush()
+                    connected = true
+                    return true to ""
+                } catch (_: Exception) {
+                    closeMonkey()
+                }
+            }
+        }
+        val longFlag = if (long) "--longpress " else ""
+        return shell("input keyevent $longFlag$code")
+    }
+
     private fun closeConnection() {
+        closeMonkey()
         try { dadb?.close() } catch (_: Exception) {}
         dadb = null
         connected = false
