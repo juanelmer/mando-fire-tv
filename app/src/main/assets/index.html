@@ -89,6 +89,16 @@ dialog label{display:block;font-size:13px;color:var(--mut);margin:10px 0 6px}
   <button class="b" data-k="24" data-rep title="Subir volumen">🔊</button>
 </div>
 
+<div id="tvBox" style="display:none">
+<h2>Tele (infrarrojos)</h2>
+<div class="row r4">
+  <button class="b" data-ir="power" title="Encender/apagar tele" style="font-size:16px">⏻ TV</button>
+  <button class="b" data-ir="input" title="Entrada" style="font-size:15px">Entrada</button>
+  <button class="b" data-ir="chdown" data-rep title="Canal -" style="font-size:16px">CH−</button>
+  <button class="b" data-ir="chup" data-rep title="Canal +" style="font-size:16px">CH+</button>
+</div>
+</div>
+
 <h2>Apps</h2>
 <div class="apps" id="apps"></div>
 
@@ -110,7 +120,11 @@ dialog label{display:block;font-size:13px;color:var(--mut);margin:10px 0 6px}
   <label>IP del Fire TV</label>
   <div class="txt"><input id="ip" placeholder="192.168.1.50" inputmode="url" autocapitalize="off"><button class="send" id="conBtn">Conectar</button></div>
   <div class="hint">En el Fire TV: Ajustes → Mi Fire TV → Acerca de → Red. La primera vez acepta el aviso en la tele.</div>
-  <label>IP de la tele LG (para volumen y silencio)</label>
+  <label>Mando universal de infrarrojos (tele)</label>
+  <div class="item" style="border:0"><span>Usar infrarrojos para volumen, silencio y tele</span><input type="checkbox" id="irChk" style="flex:0;width:24px;height:24px"></div>
+  <div class="item" style="border:0"><span>Mando: <b id="irSet">LG (integrado)</b></span><button class="mini" id="irPick">Cambiar marca</button></div>
+  <div class="hint" id="irHint">Apunta con el móvil a la tele, como un mando normal.</div>
+  <label>IP de la tele LG por WiFi (opcional)</label>
   <div class="txt"><input id="lgip" placeholder="192.168.1.60" inputmode="url" autocapitalize="off"><button class="send" id="lgBtn">Vincular</button></div>
   <div class="hint">Déjalo vacío para no usarla. Al vincular, acepta el aviso que sale en la tele LG.</div>
   <label>Mis apps</label>
@@ -122,6 +136,18 @@ dialog label{display:block;font-size:13px;color:var(--mut);margin:10px 0 6px}
   </div>
   <div class="list" id="scan"></div>
   <div class="acts"><button class="send" id="closeCfg" style="padding:10px 18px">Hecho</button></div>
+</dialog>
+
+<dialog id="pick">
+  <h1 style="font-size:17px;margin:0 0 8px">Elegir mando de tele</h1>
+  <input id="brandQ" placeholder="Buscar marca (Samsung, Sony, Philips…)" autocomplete="off" style="width:100%">
+  <div class="list" id="brandList" style="max-height:48vh"></div>
+  <div id="setsBox" style="display:none">
+    <div style="font-weight:600;margin:10px 0 2px" id="setsTitle"></div>
+    <div class="list" id="setList" style="max-height:48vh"></div>
+  </div>
+  <div class="hint">Apunta a la tele y pulsa ⏻ en cada mando de la lista hasta que la tele reaccione. Después pulsa <b>Usar</b>. Códigos de IRDB.</div>
+  <div class="acts"><button class="mini" id="pickBack">‹ Marcas</button><button class="mini" id="lgReset">Volver a LG</button><button class="send" id="pickClose" style="padding:8px 16px">Cerrar</button></div>
 </dialog>
 
 <div class="toast" id="toast"></div>
@@ -150,6 +176,64 @@ document.querySelectorAll('[data-k]').forEach(b=>{
   b.addEventListener('contextmenu',e=>e.preventDefault());
 });
 
+async function irSend(cmd){vib();const r=await api('/api/ir',{cmd});if(!r.ok)toast(r.msg||'Error',true)}
+document.querySelectorAll('[data-ir]').forEach(b=>{
+  const cmd=b.dataset.ir, rep=b.hasAttribute('data-rep');let iv,to,fired;
+  const start=e=>{e.preventDefault();fired=false;b.classList.add('pressed');if(rep){irSend(cmd);fired=true;to=setTimeout(()=>iv=setInterval(()=>irSend(cmd),200),450)}};
+  const end=e=>{e.preventDefault();b.classList.remove('pressed');clearTimeout(to);clearInterval(iv);if(!fired)irSend(cmd)};
+  const cancel=()=>{b.classList.remove('pressed');clearTimeout(to);clearInterval(iv)};
+  b.addEventListener('pointerdown',start);b.addEventListener('pointerup',end);b.addEventListener('pointerleave',cancel);b.addEventListener('pointercancel',cancel);
+});
+$('#irChk').onchange=async()=>{const r=await api('/api/irmode',{on:$('#irChk').checked});toast(r.msg,!r.ok);if(!r.ok)$('#irChk').checked=false;$('#tvBox').style.display=$('#irChk').checked?'':'none'};
+
+// ---- selector de mando universal
+let irIndex=null, brands={};
+function isTv(l){const t=(l.split('/')[1]||'');return /tv|tele|lcd|led|plasma|monitor/i.test(t)}
+async function openPick(){
+  $('#pick').showModal();
+  if(!irIndex){
+    $('#brandList').innerHTML='<div class="hint">Descargando lista de marcas…</div>';
+    const r=await api('/api/ir/index');
+    if(!r.ok){$('#brandList').innerHTML='';return toast(r.msg||'Error',true)}
+    irIndex=r.index.split('\n').map(x=>x.trim()).filter(x=>x.endsWith('.csv'));
+    brands={};irIndex.forEach(l=>{const b=l.split('/')[0];(brands[b]=brands[b]||[]).push(l)});
+  }
+  showBrands();
+}
+function row(text,sub){const d=document.createElement('div');d.className='item';const s=document.createElement('span');s.textContent=text;if(sub){s.title=sub}d.appendChild(s);return d}
+function btn(label,fn,cls){const b=document.createElement('button');b.className=cls||'mini';b.textContent=label;b.onclick=fn;return b}
+function showBrands(){
+  $('#setsBox').style.display='none';$('#brandList').style.display='';$('#brandQ').style.display='';
+  const q=$('#brandQ').value.trim().toLowerCase();
+  let list=Object.keys(brands).filter(b=>!q||b.toLowerCase().includes(q));
+  list.sort((a,b)=>{const ta=brands[a].some(isTv)?0:1,tb=brands[b].some(isTv)?0:1;return ta-tb||a.localeCompare(b)});
+  const box=$('#brandList');box.innerHTML='';
+  list.slice(0,300).forEach(b=>{const n=brands[b].filter(isTv).length;const d=row(b+(n?'  ·  '+n+' mando'+(n>1?'s':'')+' de TV':''));d.style.cursor='pointer';d.onclick=()=>showSets(b);box.appendChild(d)});
+  if(!list.length)box.innerHTML='<div class="hint">No encuentro esa marca. Prueba otra forma de escribirla.</div>';
+}
+function setRow(b,l){
+  const parts=l.split('/');const label=parts.slice(1).join(' / ').replace(/\.csv$/,'');
+  const d=row(label);
+  d.append(btn('⏻',async()=>{vib();const r=await api('/api/ir/test',{path:l,cmd:'power'});toast(r.msg||'Error',!r.ok)}),
+           btn('🔊',async()=>{vib();const r=await api('/api/ir/test',{path:l,cmd:'volup'});toast(r.msg||'Error',!r.ok)}),
+           btn('Usar',async()=>{const r=await api('/api/ir/use',{path:l,name:b+' · '+label});toast(r.msg||'Error',!r.ok);
+             if(r.ok){$('#irSet').textContent=b+' · '+label;$('#irChk').checked=true;$('#tvBox').style.display='';$('#pick').close()}},'send'));
+  return d;
+}
+function showSets(b){
+  $('#brandList').style.display='none';$('#brandQ').style.display='none';$('#setsBox').style.display='';
+  $('#setsTitle').textContent=b;
+  const all=brands[b]||[],tv=all.filter(isTv),other=all.filter(l=>!isTv(l));
+  const box=$('#setList');box.innerHTML='';
+  tv.forEach(l=>box.appendChild(setRow(b,l)));
+  if(other.length){const h=document.createElement('div');h.className='hint';h.style.margin='10px 0 4px';h.textContent=tv.length?'Otros mandos de '+b+' (por si el tuyo está aquí):':'Mandos de '+b+':';box.appendChild(h);other.forEach(l=>box.appendChild(setRow(b,l)))}
+}
+$('#irPick').onclick=openPick;
+$('#brandQ').addEventListener('input',showBrands);
+$('#pickBack').onclick=showBrands;
+$('#pickClose').onclick=()=>$('#pick').close();
+$('#lgReset').onclick=async()=>{const r=await api('/api/ir/reset',{});toast(r.msg,!r.ok);$('#irSet').textContent='LG (integrado)'};
+
 function renderApps(){
   $('#apps').innerHTML='';
   apps.forEach(a=>{const b=document.createElement('button');b.textContent=a.name;
@@ -168,6 +252,9 @@ async function status(){
   
   if(r.ip!==undefined && !$('#ip').value)$('#ip').value=r.ip;
   if(r.lg_ip!==undefined && !$('#lgip').value)$('#lgip').value=r.lg_ip;
+  if(r.ir_set)$('#irSet').textContent=r.ir_set;
+  if(r.ir_on!==undefined){$('#irChk').checked=r.ir_on;$('#tvBox').style.display=r.ir_on?'':'none'}
+  if(r.ir_available===false){$('#irHint').textContent='Este móvil no tiene infrarrojos accesibles.'}
   $('#dot').className='dot'+(r.connected?' on':'');
   $('#st').textContent=r.connected?'Conectado a '+r.ip:(r.ip?'Desconectado — toca ⚙️ y Conectar':'Configura la IP en ⚙️');
   if(!r.ip)$('#cfg').showModal();

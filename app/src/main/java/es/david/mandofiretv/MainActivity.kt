@@ -31,6 +31,8 @@ class MainActivity : Activity() {
     private var monkeyFailedAt = 0L
     private val pendingKeys = AtomicInteger(0)
     private lateinit var lg: LgTv
+    private lateinit var ir: IrTv
+    private val irExec = Executors.newSingleThreadExecutor()   // los infrarrojos no esperan a la cola del Fire TV
 
     private val pkgRe = Regex("^[A-Za-z0-9_.]+$")
     private val ipRe = Regex("^[A-Za-z0-9.\\-]+(:\\d{1,5})?$")
@@ -48,6 +50,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("config", MODE_PRIVATE)
         lg = LgTv(prefs)
+        ir = IrTv(this, prefs)
         web = WebView(this)
         web.setBackgroundColor(0xFF111318.toInt())
         web.settings.javaScriptEnabled = true
@@ -60,12 +63,19 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         exec.execute { try { dadb?.close() } catch (_: Exception) {}; lg.close() }
         exec.shutdown()
+        irExec.shutdown()
         super.onDestroy()
     }
 
     // Los botones de volumen del móvil controlan el volumen de la tele cuando hay conexión
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if ((connected || lg.configured()) && (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)) {
+        val isVol = keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        if (isVol && irOn()) {
+            val cmd = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) "volup" else "voldown"
+            irExec.execute { ir.send(cmd) }
+            return true
+        }
+        if ((connected || lg.configured()) && isVol) {
             val code = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) 24 else 25
             if (pendingKeys.get() < 2) {
                 pendingKeys.incrementAndGet()
@@ -80,6 +90,15 @@ class MainActivity : Activity() {
     inner class Bridge {
         @JavascriptInterface
         fun call(id: Int, path: String, body: String) {
+            val keyCode = if (path == "/api/key") (try { JSONObject(body).optInt("code", -1) } catch (_: Exception) { -1 }) else -1
+            if (path.startsWith("/api/ir") || (irOn() && ir.cmdForKey(keyCode) != null)) {
+                irExec.execute {
+                    val res = try { route(path, if (body.isEmpty()) JSONObject() else JSONObject(body)) }
+                              catch (e: Exception) { result(false, e.message ?: e.toString()) }
+                    runOnUiThread { web.evaluateJavascript("window.__cb($id, ${JSONObject.quote(res.toString())})", null) }
+                }
+                return
+            }
             // Si ya hay teclas esperando en cola, se descartan las repeticiones para que no se acumule retraso
             val isKey = path == "/api/key"
             if (isKey && pendingKeys.get() >= 2) {
@@ -114,6 +133,9 @@ class MainActivity : Activity() {
             .put("ip", ip())
             .put("connected", connected)
             .put("lg_ip", lg.ip())
+            .put("ir_available", ir.available())
+            .put("ir_on", irOn())
+            .put("ir_set", ir.setName())
             .put("apps", apps())
 
         "/api/connect" -> {
@@ -128,6 +150,47 @@ class MainActivity : Activity() {
                 val (ok, out) = shell("echo ok")
                 if (ok && out.contains("ok")) result(true, "Conectado") else result(false, out)
             }
+        }
+
+        "/api/ir" -> {
+            val (ok, msg) = ir.send(d.optString("cmd"))
+            result(ok, msg)
+        }
+
+        "/api/ir/index" -> JSONObject().put("ok", true).put("index", ir.db.index())
+
+        "/api/ir/test" -> {
+            val list = ir.db.codes(d.optString("path"))
+            val map = ir.db.mapButtons(list)
+            val cmd = d.optString("cmd", "power")
+            val c = map[cmd] ?: (if (cmd == "power") list.firstOrNull()?.second else null)
+            if (c == null) result(false, "Este mando no tiene esa tecla.")
+            else {
+                val (ok, msg) = ir.sendCode(c)
+                result(ok, if (ok) "Enviado (${c.protocol}). ¿Ha reaccionado la tele?" else msg)
+            }
+        }
+
+        "/api/ir/use" -> {
+            val path = d.optString("path")
+            val map = ir.db.mapButtons(ir.db.codes(path))
+            if (map.isEmpty()) result(false, "No encuentro teclas útiles en este mando. Prueba otro.")
+            else {
+                val name = d.optString("name").ifEmpty { path }
+                ir.saveSet(name, map)
+                prefs.edit().putBoolean("ir_on", true).apply()
+                val names = mapOf("power" to "encender", "volup" to "vol+", "voldown" to "vol−", "mute" to "silencio",
+                                  "chup" to "CH+", "chdown" to "CH−", "input" to "entrada")
+                result(true, "Usando $name. Teclas: " + map.keys.mapNotNull { names[it] }.joinToString(", "))
+            }
+        }
+
+        "/api/ir/reset" -> { ir.resetToLg(); result(true, "Vuelto a LG (integrado)") }
+
+        "/api/irmode" -> {
+            val on = d.optBoolean("on")
+            if (on && !ir.available()) result(false, "Este móvil no tiene emisor de infrarrojos accesible.")
+            else { prefs.edit().putBoolean("ir_on", on).apply(); result(true, if (on) "Infrarrojos activados" else "Infrarrojos desactivados") }
         }
 
         "/api/lg" -> {
@@ -189,6 +252,8 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------ ADB
+    private fun irOn(): Boolean = prefs.getBoolean("ir_on", false)
+
     private fun ip(): String = prefs.getString("ip", "") ?: ""
 
     private fun apps(): JSONArray = try {
@@ -248,7 +313,8 @@ class MainActivity : Activity() {
 
     /** Envía una tecla: primero por el canal rápido; si no va, con "input keyevent". */
     private fun sendKey(code: Int, long: Boolean): Pair<Boolean, String> {
-        // Volumen y silencio van directos a la tele LG si está configurada
+        // Volumen y silencio: primero infrarrojos del móvil, luego la tele LG por WiFi, si no el Fire TV
+        if (irOn()) ir.cmdForKey(code)?.let { return ir.send(it) }
         if (lg.configured() && (code == 24 || code == 25 || code == 164)) return lg.key(code)
         if (!long) {
             val sock = monkey()
