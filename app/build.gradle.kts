@@ -11,8 +11,8 @@ android {
         applicationId = "es.david.mandofiretv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.5"
+        versionCode = 8
+        versionName = "1.7"
     }
 
     // Llave fija: así cada APK nueva se instala encima de la anterior sin desinstalar

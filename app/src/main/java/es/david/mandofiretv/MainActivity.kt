@@ -2,7 +2,11 @@ package es.david.mandofiretv
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
@@ -30,8 +34,10 @@ class MainActivity : Activity() {
     private var monkeySock: AdbStream? = null
     private var monkeyFailedAt = 0L
     private val pendingKeys = AtomicInteger(0)
+    private val monkeyReader = Executors.newSingleThreadExecutor()   // lee la confirmación "OK" del canal rápido
     private lateinit var lg: LgTv
     private lateinit var ir: IrTv
+    private lateinit var bt: BtRemote
     private val irExec = Executors.newSingleThreadExecutor()   // los infrarrojos no esperan a la cola del Fire TV
 
     private val pkgRe = Regex("^[A-Za-z0-9_.]+$")
@@ -51,6 +57,9 @@ class MainActivity : Activity() {
         prefs = getSharedPreferences("config", MODE_PRIVATE)
         lg = LgTv(prefs)
         ir = IrTv(this, prefs)
+        bt = BtRemote(this)
+        bt.wantedAddress = prefs.getString("bt_addr", null)
+        if (btOn() && hasBtPerms()) bt.start()
         web = WebView(this)
         web.setBackgroundColor(0xFF111318.toInt())
         web.settings.javaScriptEnabled = true
@@ -61,10 +70,17 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        try { bt.stop() } catch (_: Exception) {}
         exec.execute { try { dadb?.close() } catch (_: Exception) {}; lg.close() }
         exec.shutdown()
         irExec.shutdown()
+        monkeyReader.shutdownNow()
         super.onDestroy()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 7 && hasBtPerms() && btOn()) bt.start()
     }
 
     // Los botones de volumen del móvil controlan el volumen de la tele cuando hay conexión
@@ -137,6 +153,9 @@ class MainActivity : Activity() {
             .put("ir_available", ir.available())
             .put("ir_on", irOn())
             .put("ir_set", ir.setName())
+            .put("bt_on", btOn())
+            .put("bt_connected", btOn() && bt.connected)
+            .put("bt_host", bt.hostName())
             .put("apps", apps())
 
         "/api/tvs" -> JSONObject().put("ok", true).put("tvs", tvList()).put("current", currentTv())
@@ -188,6 +207,8 @@ class MainActivity : Activity() {
                     prefs.edit().putString("ip", newIp).apply()
                     closeConnection()
                 }
+                closeMonkey()
+                monkeyFailedAt = 0L
                 val (ok, out) = shell("echo ok")
                 if (ok && out.contains("ok")) result(true, "Conectado") else result(false, out)
             }
@@ -253,10 +274,68 @@ class MainActivity : Activity() {
             }
         }
 
-        "/api/text" -> {
+        "/api/text" -> if (btOn() && bt.connected) {
+            if (bt.type(d.optString("text"))) result(true, "") else result(false, "No se pudo enviar por Bluetooth")
+        } else {
             val t = escapeText(d.optString("text"))
             if (t.isEmpty()) result(false, "Texto vacío o no válido")
             else { val (ok, out) = shell("input text $t"); result(ok, out) }
+        }
+
+        "/api/bt/state" -> JSONObject().put("ok", true)
+            .put("supported", bt.supported).put("enabled", bt.enabled).put("perms", hasBtPerms())
+            .put("on", btOn()).put("registered", bt.registered).put("connected", bt.connected)
+            .put("host", bt.hostName()).put("addr", prefs.getString("bt_addr", "") ?: "")
+
+        "/api/bt/on" -> {
+            val on = d.optBoolean("on")
+            when {
+                !on -> { prefs.edit().putBoolean("bt_on", false).apply(); bt.disconnect(); result(true, "Bluetooth desactivado: las teclas van por WiFi") }
+                Build.VERSION.SDK_INT < 28 -> result(false, "Hace falta Android 9 o superior para el modo Bluetooth.")
+                !bt.supported -> result(false, "Tu móvil no permite actuar como mando Bluetooth (el fabricante lo tiene desactivado).")
+                !bt.enabled -> result(false, "Activa el Bluetooth del móvil y vuelve a intentarlo.")
+                !hasBtPerms() -> { prefs.edit().putBoolean("bt_on", true).apply(); requestBtPerms(); result(false, "Acepta el permiso de Bluetooth (dispositivos cercanos) y vuelve a pulsar.") }
+                else -> {
+                    prefs.edit().putBoolean("bt_on", true).apply()
+                    bt.start()
+                    Thread.sleep(1500)
+                    if (bt.unsupported) result(false, "Tu móvil no permite actuar como mando Bluetooth (el fabricante lo tiene desactivado).")
+                    else result(true, if (bt.connected) "Conectado por Bluetooth" else "Bluetooth listo. Ahora empareja el Fire TV (pasos debajo).")
+                }
+            }
+        }
+
+        "/api/bt/visible" -> {
+            if (!hasBtPerms()) { requestBtPerms(); result(false, "Acepta el permiso de Bluetooth y vuelve a pulsar.") }
+            else {
+                runOnUiThread {
+                    try {
+                        startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 180))
+                    } catch (_: Exception) {}
+                }
+                result(true, "Acepta en el móvil y busca el móvil desde el Fire TV")
+            }
+        }
+
+        "/api/bt/devices" -> {
+            val a = JSONArray()
+            bt.bonded().forEach { (name, addr) -> a.put(JSONObject().put("name", name).put("addr", addr)) }
+            JSONObject().put("ok", true).put("devices", a)
+        }
+
+        "/api/bt/use" -> {
+            val addr = d.optString("addr")
+            if (!Regex("^[0-9A-Fa-f:]{17}$").matches(addr)) result(false, "Dispositivo no válido")
+            else {
+                prefs.edit().putString("bt_addr", addr).putBoolean("bt_on", true).apply()
+                bt.wantedAddress = addr
+                if (hasBtPerms()) bt.start()
+                bt.tryConnectWanted()
+                var waited = 0
+                while (!bt.connected && waited < 8000) { Thread.sleep(250); waited += 250 }
+                if (bt.connected) result(true, "Conectado por Bluetooth a ${bt.hostName()}")
+                else result(false, "No se ha conectado todavía. Comprueba que el Fire TV tiene emparejado este móvil y vuelve a probar.")
+            }
         }
 
         "/api/app" -> {
@@ -295,7 +374,7 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------ ADB
     // ------------------------------------------------------------ varias teles
     // Los ajustes de la tele activa viven en las claves normales; las de las demás, guardadas con prefijo pN_
-    private val TV_KEYS = listOf("ip", "apps", "lg_ip", "lg_key", "ir_set", "ir_set_name", "ir_on")
+    private val TV_KEYS = listOf("ip", "apps", "lg_ip", "lg_key", "ir_set", "ir_set_name", "ir_on", "bt_on", "bt_addr")
 
     private fun tvIds(): List<Int> {
         val raw = prefs.getString("tv_ids", null)
@@ -334,6 +413,23 @@ class MainActivity : Activity() {
         }
         e.putInt("tv_current", id)
         e.commit()
+        // Bluetooth: conectar con el Fire TV de esta tele
+        bt.wantedAddress = prefs.getString("bt_addr", null)
+        if (btOn()) { if (hasBtPerms()) bt.start(); bt.tryConnectWanted() } else bt.disconnect()
+    }
+
+    private fun btOn(): Boolean = prefs.getBoolean("bt_on", false)
+
+    private fun hasBtPerms(): Boolean {
+        if (Build.VERSION.SDK_INT < 31) return true
+        return checkSelfPermission("android.permission.BLUETOOTH_CONNECT") == PackageManager.PERMISSION_GRANTED &&
+               checkSelfPermission("android.permission.BLUETOOTH_ADVERTISE") == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestBtPerms() {
+        if (Build.VERSION.SDK_INT >= 31) runOnUiThread {
+            requestPermissions(arrayOf("android.permission.BLUETOOTH_CONNECT", "android.permission.BLUETOOTH_ADVERTISE"), 7)
+        }
     }
 
     private fun irOn(): Boolean = prefs.getBoolean("ir_on", false)
@@ -382,12 +478,12 @@ class MainActivity : Activity() {
         if (System.currentTimeMillis() - monkeyFailedAt < 30_000) return null   // si falló hace poco, usa el modo normal
         val conn = try { connection() } catch (e: Exception) { return null }
         // ¿Ya hay uno escuchando (de una vez anterior)?
-        try { return conn.open("tcp:1080").also { monkeySock = it; drain(it) } } catch (_: Exception) {}
+        try { return conn.open("tcp:1080").also { monkeySock = it } } catch (_: Exception) {}
         try {
             monkeyProc = conn.open("shell:monkey --port 1080").also { drain(it) }
             repeat(15) {
                 Thread.sleep(200)
-                try { return conn.open("tcp:1080").also { monkeySock = it; drain(it) } } catch (_: Exception) {}
+                try { return conn.open("tcp:1080").also { monkeySock = it } } catch (_: Exception) {}
             }
         } catch (_: Exception) {}
         closeMonkey()
@@ -400,6 +496,10 @@ class MainActivity : Activity() {
         // Volumen y silencio: primero infrarrojos del móvil, luego la tele LG por WiFi, si no el Fire TV
         if (irOn()) ir.cmdForKey(code)?.let { return ir.send(it) }
         if (lg.configured() && (code == 24 || code == 25 || code == 164)) return lg.key(code)
+        if (btOn() && bt.connected) {
+            if (bt.sendKey(code, long) == true) return true to ""
+            // tecla sin equivalente Bluetooth (p. ej. Ajustes) o fallo: se intenta por WiFi
+        }
         if (!long) {
             val sock = monkey()
             if (sock != null) {
@@ -407,10 +507,17 @@ class MainActivity : Activity() {
                     val name = KeyEvent.keyCodeToString(code)
                     sock.sink.writeUtf8("press $name\n")
                     sock.sink.flush()
-                    connected = true
-                    return true to ""
+                    // Esperar la confirmación del Fire TV; si no llega, el canal está colgado
+                    val reply = monkeyReader.submit<String?> { sock.source.readUtf8Line() }
+                        .get(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    if (reply != null && reply.startsWith("OK")) {
+                        connected = true
+                        return true to ""
+                    }
+                    closeMonkey()
                 } catch (_: Exception) {
                     closeMonkey()
+                    monkeyFailedAt = System.currentTimeMillis()
                 }
             }
         }
