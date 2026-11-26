@@ -286,6 +286,41 @@ class MainActivity : Activity() {
             .put("supported", bt.supported).put("enabled", bt.enabled).put("perms", hasBtPerms())
             .put("on", btOn()).put("registered", bt.registered).put("connected", bt.connected)
             .put("host", bt.hostName()).put("addr", prefs.getString("bt_addr", "") ?: "")
+            .put("proxy", bt.proxyConnected).put("error", bt.lastError)
+
+        "/api/bt/restart" -> {
+            if (!hasBtPerms()) { requestBtPerms(); result(false, "Acepta el permiso de Bluetooth y vuelve a pulsar.") }
+            else {
+                runOnUiThread { bt.restart() }
+                Thread.sleep(2500)
+                when {
+                    bt.registered -> result(true, "Bluetooth listo")
+                    bt.lastError.isNotEmpty() -> result(false, "Bluetooth: ${bt.lastError}")
+                    !bt.proxyConnected -> result(false, "El sistema del móvil no responde al modo mando Bluetooth.")
+                    else -> result(false, "Bluetooth todavía preparándose. Espera unos segundos.")
+                }
+            }
+        }
+
+        "/api/bt/auto" -> {
+            // Lee por WiFi (ADB) la dirección Bluetooth del Fire TV y se conecta a ella directamente
+            val macRe = Regex("([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
+            var mac = macRe.find(shell("settings get secure bluetooth_address").second)?.value
+            if (mac == null || mac == "00:00:00:00:00:00" || mac == "02:00:00:00:00:00")
+                mac = macRe.find(shell("dumpsys bluetooth_manager | grep -i -m1 'address'").second)?.value
+            if (mac == null) result(false, "No pude leer la dirección Bluetooth del Fire TV. Conecta primero por WiFi (punto verde) y vuelve a probar.")
+            else if (!bt.registered) result(false, "El Bluetooth del móvil aún no está listo como mando (pulsa Reiniciar Bluetooth).")
+            else {
+                val addr = mac.uppercase()
+                prefs.edit().putString("bt_addr", addr).putBoolean("bt_on", true).apply()
+                bt.wantedAddress = addr
+                bt.tryConnectWanted()
+                var waited = 0
+                while (!bt.connected && waited < 15000) { Thread.sleep(250); waited += 250 }
+                if (bt.connected) result(true, "Conectado por Bluetooth al Fire TV ($addr)")
+                else result(false, "He intentado conectar con $addr. Si en la tele sale un aviso de emparejamiento, acéptalo y vuelve a pulsar.")
+            }
+        }
 
         "/api/bt/on" -> {
             val on = d.optBoolean("on")

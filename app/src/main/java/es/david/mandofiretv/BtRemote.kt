@@ -30,6 +30,10 @@ class BtRemote(private val context: Context) {
     @Volatile var unsupported: Boolean = false
         private set
     private var proxyRequested = false
+    @Volatile var proxyConnected = false
+        private set
+    @Volatile var lastError = ""
+        private set
     var wantedAddress: String? = null
 
     val supported: Boolean get() = Build.VERSION.SDK_INT >= 28 && adapter != null && !unsupported
@@ -69,27 +73,32 @@ class BtRemote(private val context: Context) {
     fun start() {
         if (Build.VERSION.SDK_INT < 28 || adapter == null || proxyRequested) return
         proxyRequested = true
-        val ok = adapter.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
+        lastError = ""
+        val ok = try { adapter.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
             override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
                 val h = proxy as BluetoothHidDevice
                 hid = h
+                proxyConnected = true
                 val sdp = BluetoothHidDeviceAppSdpSettings(
                     "Mando Fire TV", "Mando para Fire TV", "David",
                     BluetoothHidDevice.SUBCLASS1_COMBO, descriptor
                 )
                 try {
-                    if (!h.registerApp(sdp, null, null, Executors.newSingleThreadExecutor(), callback)) unsupported = true
-                } catch (_: Exception) { unsupported = true }
+                    if (!h.registerApp(sdp, null, null, Executors.newSingleThreadExecutor(), callback))
+                        lastError = "el sistema rechazó registrar el mando (puede que otra app de teclado Bluetooth lo esté usando: ciérrala)"
+                } catch (e: Exception) { lastError = "error al registrar: ${e.message}" }
             }
-            override fun onServiceDisconnected(profile: Int) { hid = null; registered = false; host = null }
-        }, BluetoothProfile.HID_DEVICE)
-        if (!ok) unsupported = true
+            override fun onServiceDisconnected(profile: Int) { hid = null; registered = false; host = null; proxyConnected = false }
+        }, BluetoothProfile.HID_DEVICE) } catch (e: Exception) { lastError = "sin permiso o error: ${e.message}"; proxyRequested = false; false }
+        if (!ok && lastError.isEmpty()) { unsupported = true; lastError = "este móvil no ofrece el perfil de mando Bluetooth" }
     }
+
+    fun restart() { stop(); unsupported = false; start() }
 
     fun stop() {
         try { hid?.unregisterApp() } catch (_: Exception) {}
         try { adapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid) } catch (_: Exception) {}
-        hid = null; registered = false; host = null; proxyRequested = false
+        hid = null; registered = false; host = null; proxyRequested = false; proxyConnected = false
     }
 
     /** Dispositivos ya emparejados con el móvil (para elegir el Fire TV). */

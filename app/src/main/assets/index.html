@@ -130,9 +130,11 @@ dialog label{display:block;font-size:13px;color:var(--mut);margin:10px 0 6px}
   <div class="item" style="border:0"><span>Usar el móvil como mando Bluetooth</span><input type="checkbox" id="btChk" style="flex:0;width:24px;height:24px"></div>
   <div id="btBox" style="display:none">
     <div class="hint" id="btState">…</div>
-    <div class="acts" style="justify-content:space-between;margin-top:8px"><button class="mini" id="btVisible">1. Hacer visible el móvil</button><button class="mini" id="btList">2. Elegir el Fire TV</button></div>
+    <div class="acts" style="justify-content:space-between;margin-top:8px"><button class="send" id="btAuto" style="padding:8px 12px">Conectar al Fire TV</button><button class="mini" id="btRestart">Reiniciar Bluetooth</button></div>
+    <div class="hint">"Conectar al Fire TV" usa el WiFi una sola vez para averiguar la dirección Bluetooth del Fire TV y se conecta directo. Si en la tele sale un aviso de emparejar, acéptalo.</div>
+    <div class="acts" style="justify-content:space-between;margin-top:8px"><button class="mini" id="btVisible">Hacer visible el móvil</button><button class="mini" id="btList">Elegir de la lista</button></div>
     <div class="list" id="btDevs"></div>
-    <div class="hint">Emparejar (una vez): pulsa <b>1</b>; en el Fire TV ve a Ajustes → Mandos y dispositivos Bluetooth → Otros dispositivos Bluetooth → Añadir, y elige tu móvil. Después pulsa <b>2</b> y toca el Fire TV.</div>
+    <div class="hint">Método alternativo: "Hacer visible el móvil" y añadirlo desde el Fire TV (Ajustes → Mandos y dispositivos Bluetooth → Otros dispositivos Bluetooth → Añadir); luego "Elegir de la lista".</div>
   </div>
   <label>Mando universal de infrarrojos (tele)</label>
   <div class="item" style="border:0"><span>Usar infrarrojos para volumen, silencio y tele</span><input type="checkbox" id="irChk" style="flex:0;width:24px;height:24px"></div>
@@ -270,11 +272,15 @@ async function btRefresh(){
   else if(!r.enabled)t='Activa el Bluetooth del móvil.';
   else if(!r.perms)t='Falta el permiso de Bluetooth: desmarca y vuelve a marcar la casilla.';
   else if(r.connected)t='✅ Conectado por Bluetooth a '+r.host;
-  else if(r.registered)t='Listo, esperando al Fire TV'+(r.addr?' (pulsa 2 si no conecta solo)':'')+'.';
+  else if(r.registered)t='Listo. Pulsa "Conectar al Fire TV".';
+  else if(r.error)t='⚠️ Bluetooth: '+r.error;
+  else if(r.on&&!r.proxy)t='Preparando Bluetooth… (si no cambia en unos segundos, pulsa Reiniciar Bluetooth)';
   else t='Preparando Bluetooth…';
   $('#btState').textContent=t;
 }
 $('#btChk').onchange=async()=>{const r=await api('/api/bt/on',{on:$('#btChk').checked});toast(r.msg,!r.ok);await btRefresh();status()};
+$('#btAuto').onclick=async()=>{toast('Conectando por Bluetooth… mira la tele');const r=await api('/api/bt/auto',{});toast(r.msg,!r.ok);btRefresh();status()};
+$('#btRestart').onclick=async()=>{toast('Reiniciando Bluetooth…');const r=await api('/api/bt/restart',{});toast(r.msg,!r.ok);btRefresh()};
 $('#btVisible').onclick=async()=>{const r=await api('/api/bt/visible',{});toast(r.msg,!r.ok)};
 $('#btList').onclick=async()=>{
   const r=await api('/api/bt/devices');const box=$('#btDevs');box.innerHTML='';
