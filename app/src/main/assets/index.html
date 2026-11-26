@@ -38,6 +38,9 @@ h2{font-size:13px;color:var(--mut);font-weight:600;text-transform:uppercase;lett
 .txt{display:flex;gap:8px}
 input{flex:1;background:var(--card);border:1px solid #2c3140;color:var(--txt);border-radius:12px;padding:12px;font-size:16px;user-select:text;-webkit-user-select:text}
 .send{background:var(--acc);color:#111;border:0;border-radius:12px;padding:0 16px;font-weight:600;font-size:15px;cursor:pointer}
+.tvs{display:flex;gap:8px;overflow-x:auto;margin:0 0 12px;padding-bottom:2px}
+.tvs button{flex:0 0 auto;background:var(--card);color:var(--txt);border:1px solid #2c3140;border-radius:20px;padding:8px 14px;font-size:14px;cursor:pointer}
+.tvs button.on{background:var(--acc);color:#111;border-color:var(--acc);font-weight:600}
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(80px);background:#2a2f3c;color:var(--txt);padding:10px 16px;border-radius:12px;font-size:14px;max-width:90%;transition:transform .2s;z-index:9}
 .toast.show{transform:translateX(-50%) translateY(0)}
 .toast.err{background:#5a2328}
@@ -56,6 +59,7 @@ dialog label{display:block;font-size:13px;color:var(--mut);margin:10px 0 6px}
   <div><h1>Mando Fire TV</h1><div class="status"><span id="dot" class="dot"></span><span id="st">Comprobando…</span></div></div>
   <button class="icon" id="cfgBtn" aria-label="Ajustes">⚙️</button>
 </header>
+<div class="tvs" id="tvs"></div>
 
 <div class="row r3">
   <button class="b" data-k="26" title="Encender/apagar">⏻</button>
@@ -117,6 +121,8 @@ dialog label{display:block;font-size:13px;color:var(--mut);margin:10px 0 6px}
 
 <dialog id="cfg">
   <h1 style="font-size:17px;margin:0 0 4px">Ajustes</h1>
+  <label>Nombre de esta tele</label>
+  <div class="txt"><input id="tvName" placeholder="Salón, Dormitorio…" maxlength="20"><button class="mini" id="tvRename">Guardar</button></div>
   <label>IP del Fire TV</label>
   <div class="txt"><input id="ip" placeholder="192.168.1.50" inputmode="url" autocapitalize="off"><button class="send" id="conBtn">Conectar</button></div>
   <div class="hint">En el Fire TV: Ajustes → Mi Fire TV → Acerca de → Red. La primera vez acepta el aviso en la tele.</div>
@@ -135,6 +141,7 @@ dialog label{display:block;font-size:13px;color:var(--mut);margin:10px 0 6px}
     <button class="mini" id="addBtn">Añadir</button>
   </div>
   <div class="list" id="scan"></div>
+  <div class="acts" style="justify-content:space-between"><button class="mini" id="tvDelete" style="color:var(--bad)">Borrar esta tele</button></div>
   <div class="acts"><button class="send" id="closeCfg" style="padding:10px 18px">Hecho</button></div>
 </dialog>
 
@@ -246,6 +253,23 @@ function renderApps(){
 }
 async function saveApps(){const r=await api('/api/apps',{apps});if(r.ok){apps=r.apps;renderApps()}else toast(r.msg,true)}
 
+// ---- varias teles
+async function loadTvs(){
+  const r=await api('/api/tvs');if(!r.ok)return;
+  const box=$('#tvs');box.innerHTML='';
+  r.tvs.forEach(t=>{const b=document.createElement('button');b.textContent=t.name;if(t.id===r.current){b.className='on';$('#tvName').value=t.name}
+    b.onclick=async()=>{if(t.id===r.current)return;vib();const s=await api('/api/tv/switch',{id:t.id});toast(s.msg,!s.ok);await afterSwitch()};box.appendChild(b)});
+  const add=document.createElement('button');add.textContent='+ Tele';
+  add.onclick=async()=>{const s=await api('/api/tv/add',{});toast(s.msg,!s.ok);await afterSwitch()};box.appendChild(add);
+}
+async function afterSwitch(){
+  $('#ip').value='';$('#lgip').value='';$('#scan').innerHTML='';
+  $('#dot').className='dot';$('#st').textContent='Conectando…';
+  await loadTvs();await status();
+}
+$('#tvRename').onclick=async()=>{const r=await api('/api/tv/rename',{name:$('#tvName').value});toast(r.msg,!r.ok);loadTvs()};
+$('#tvDelete').onclick=async()=>{const r=await api('/api/tv/delete',{});toast(r.msg,!r.ok);if(r.ok){$('#cfg').close();await afterSwitch()}};
+
 async function status(){
   const r=await api('/api/status');
   if(r.apps){apps=r.apps;renderApps()}
@@ -256,9 +280,9 @@ async function status(){
   if(r.ir_on!==undefined){$('#irChk').checked=r.ir_on;$('#tvBox').style.display=r.ir_on?'':'none'}
   if(r.ir_available===false){$('#irHint').textContent='Este móvil no tiene infrarrojos accesibles.'}
   $('#dot').className='dot'+(r.connected?' on':'');
-  $('#st').textContent=r.connected?'Conectado a '+r.ip:(r.ip?'Desconectado — toca ⚙️ y Conectar':'Configura la IP en ⚙️');
-  if(!r.ip)$('#cfg').showModal();
-  else if(!r.connected){const c=await api('/api/connect',{});if(c.ok){$('#dot').className='dot on';$('#st').textContent='Conectado a '+r.ip}}
+  $('#st').textContent=r.connected?'Conectado a '+(r.tv_name||r.ip):(r.ip?'Desconectado — toca ⚙️ y Conectar':'Configura la IP en ⚙️');
+  if(!r.ip){if(!$('#cfg').open)$('#cfg').showModal()}
+  else if(!r.connected){const c=await api('/api/connect',{});if(c.ok){$('#dot').className='dot on';$('#st').textContent='Conectado a '+(r.tv_name||r.ip)}}
 }
 
 $('#cfgBtn').onclick=()=>$('#cfg').showModal();
@@ -273,6 +297,6 @@ $('#scanBtn').onclick=async()=>{$('#scan').innerHTML='<div class="hint">Buscando
 async function sendText(){const t=$('#txt').value;if(!t)return;const r=await api('/api/text',{text:t});if(r.ok){$('#txt').value='';toast('Enviado')}else toast(r.msg,true)}
 $('#sendTxt').onclick=sendText;$('#txt').addEventListener('keydown',e=>{if(e.key==='Enter')sendText()});
 
-status();setInterval(status,20000);
+loadTvs();status();setInterval(status,20000);
 </script>
 </body></html>

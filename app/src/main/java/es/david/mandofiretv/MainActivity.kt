@@ -130,6 +130,7 @@ class MainActivity : Activity() {
     private fun route(path: String, d: JSONObject): JSONObject = when (path) {
         "/api/status" -> JSONObject()
             .put("adb", true)
+            .put("tv_name", tvName(currentTv()))
             .put("ip", ip())
             .put("connected", connected)
             .put("lg_ip", lg.ip())
@@ -137,6 +138,46 @@ class MainActivity : Activity() {
             .put("ir_on", irOn())
             .put("ir_set", ir.setName())
             .put("apps", apps())
+
+        "/api/tvs" -> JSONObject().put("ok", true).put("tvs", tvList()).put("current", currentTv())
+
+        "/api/tv/switch" -> {
+            val id = d.optInt("id", -1)
+            if (!tvIds().contains(id)) result(false, "Esa tele no existe")
+            else { switchTv(id); result(true, "Cambiado a ${tvName(id)}") }
+        }
+
+        "/api/tv/add" -> {
+            val ids = tvIds()
+            val id = (ids.maxOrNull() ?: 0) + 1
+            val name = d.optString("name").trim().take(20).ifEmpty { "Tele $id" }
+            saveTvIds(ids + id)
+            prefs.edit().putString("tv_name_$id", name).apply()
+            switchTv(id)
+            result(true, "Añadida $name. Pon su IP en ⚙️")
+        }
+
+        "/api/tv/rename" -> {
+            val name = d.optString("name").trim().take(20)
+            if (name.isEmpty()) result(false, "Escribe un nombre")
+            else { prefs.edit().putString("tv_name_${currentTv()}", name).apply(); result(true, "Nombre guardado") }
+        }
+
+        "/api/tv/delete" -> {
+            val ids = tvIds()
+            val cur = currentTv()
+            if (ids.size <= 1) result(false, "No puedes borrar la única tele")
+            else {
+                val other = ids.first { it != cur }
+                val gone = tvName(cur)
+                switchTv(other)
+                val e = prefs.edit()
+                for (k in TV_KEYS) e.remove("p${cur}_$k")
+                e.remove("tv_name_$cur").apply()
+                saveTvIds(ids - cur)
+                result(true, "Borrada $gone")
+            }
+        }
 
         "/api/connect" -> {
             val newIp = d.optString("ip", ip()).trim()
@@ -252,6 +293,49 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------ ADB
+    // ------------------------------------------------------------ varias teles
+    // Los ajustes de la tele activa viven en las claves normales; las de las demás, guardadas con prefijo pN_
+    private val TV_KEYS = listOf("ip", "apps", "lg_ip", "lg_key", "ir_set", "ir_set_name", "ir_on")
+
+    private fun tvIds(): List<Int> {
+        val raw = prefs.getString("tv_ids", null)
+        if (raw == null) { saveTvIds(listOf(1)); prefs.edit().putInt("tv_current", 1).apply(); return listOf(1) }
+        return raw.split(",").mapNotNull { it.trim().toIntOrNull() }.ifEmpty { listOf(1) }
+    }
+    private fun saveTvIds(ids: List<Int>) { prefs.edit().putString("tv_ids", ids.joinToString(",")).apply() }
+    private fun currentTv(): Int { tvIds(); return prefs.getInt("tv_current", 1) }
+    private fun tvName(id: Int): String = prefs.getString("tv_name_$id", null) ?: "Tele $id"
+    private fun tvList(): JSONArray {
+        val a = JSONArray()
+        for (id in tvIds()) a.put(JSONObject().put("id", id).put("name", tvName(id)))
+        return a
+    }
+
+    private fun switchTv(id: Int) {
+        val cur = currentTv()
+        if (id == cur) return
+        closeConnection()
+        lg.close()
+        val all = prefs.all
+        val e = prefs.edit()
+        for (k in TV_KEYS) {
+            // guardar la tele actual
+            when (val v = all[k]) {
+                null -> e.remove("p${cur}_$k")
+                is Boolean -> e.putBoolean("p${cur}_$k", v)
+                else -> e.putString("p${cur}_$k", v.toString())
+            }
+            // cargar la nueva
+            when (val v = all["p${id}_$k"]) {
+                null -> e.remove(k)
+                is Boolean -> e.putBoolean(k, v)
+                else -> e.putString(k, v.toString())
+            }
+        }
+        e.putInt("tv_current", id)
+        e.commit()
+    }
+
     private fun irOn(): Boolean = prefs.getBoolean("ir_on", false)
 
     private fun ip(): String = prefs.getString("ip", "") ?: ""
