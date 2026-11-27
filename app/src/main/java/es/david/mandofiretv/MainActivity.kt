@@ -314,11 +314,25 @@ class MainActivity : Activity() {
                 val addr = mac.uppercase()
                 prefs.edit().putString("bt_addr", addr).putBoolean("bt_on", true).apply()
                 bt.wantedAddress = addr
+                // 1) Emparejar desde el móvil si todavía no lo están
+                if (!bt.isBonded(addr)) {
+                    if (!bt.isBonding(addr)) bt.createBond(addr)
+                    var w = 0
+                    while (!bt.isBonded(addr) && w < 45000) {
+                        Thread.sleep(500); w += 500
+                        // si el intento terminó sin éxito, se reintenta una vez
+                        if (w == 15000 && !bt.isBonding(addr) && !bt.isBonded(addr)) bt.createBond(addr)
+                    }
+                }
+                if (!bt.isBonded(addr)) result(false, "No se completó el emparejamiento con el Fire TV ($addr). Acepta el aviso «Vincular» en el móvil y en la tele y vuelve a pulsar.")
+                else {
+                // 2) Conectar como mando
                 bt.tryConnectWanted()
                 var waited = 0
                 while (!bt.connected && waited < 15000) { Thread.sleep(250); waited += 250 }
                 if (bt.connected) result(true, "Conectado por Bluetooth al Fire TV ($addr)")
-                else result(false, "He intentado conectar con $addr. Si en la tele sale un aviso de emparejamiento, acéptalo y vuelve a pulsar.")
+                else result(false, "Emparejado, pero el Fire TV no aceptó la conexión como mando ($addr). Vuelve a pulsar Conectar al Fire TV.")
+                }
             }
         }
 

@@ -106,6 +106,21 @@ class BtRemote(private val context: Context) {
         adapter?.bondedDevices?.map { (it.name ?: it.address) to it.address }?.sortedBy { it.first } ?: emptyList()
     } catch (_: Exception) { emptyList() }
 
+    /** ¿Está ya emparejado este dispositivo con el móvil? */
+    fun isBonded(addr: String): Boolean = try {
+        adapter?.getRemoteDevice(addr)?.bondState == BluetoothDevice.BOND_BONDED
+    } catch (_: Exception) { false }
+
+    fun isBonding(addr: String): Boolean = try {
+        adapter?.getRemoteDevice(addr)?.bondState == BluetoothDevice.BOND_BONDING
+    } catch (_: Exception) { false }
+
+    /** Inicia el emparejamiento desde el móvil (no hace falta que el Fire TV sea visible). */
+    fun createBond(addr: String): Boolean = try {
+        try { adapter?.cancelDiscovery() } catch (_: Exception) {}
+        adapter?.getRemoteDevice(addr)?.createBond() == true
+    } catch (_: Exception) { false }
+
     fun hostName(): String = try { host?.name ?: host?.address ?: "" } catch (_: Exception) { "" }
 
     fun tryConnectWanted(): Boolean {
